@@ -1,40 +1,58 @@
 name: Build Android APK
-
 on:
   workflow_dispatch:
   push:
-
+    paths:
+      - 'source.zip'
+      - '.github/workflows/build-apk.yml'
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: CarQuickAndroid
     steps:
       - uses: actions/checkout@v4
-
+      - name: Extract uploaded ZIP
+        shell: bash
+        run: |
+          if [ ! -f source.zip ]; then
+            echo "請將專案壓縮包命名為 source.zip，並上傳到倉庫根目錄。"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/carquick-source"
+          unzip -q source.zip -d "$RUNNER_TEMP/carquick-source"
+          if [ -f "$RUNNER_TEMP/carquick-source/CarQuickAndroid/settings.gradle" ]; then
+            echo "PROJECT_DIR=$RUNNER_TEMP/carquick-source/CarQuickAndroid" >> "$GITHUB_ENV"
+          elif [ -f "$RUNNER_TEMP/carquick-source/settings.gradle" ]; then
+            echo "PROJECT_DIR=$RUNNER_TEMP/carquick-source" >> "$GITHUB_ENV"
+          else
+            echo "ZIP 中找不到 Android 專案的 settings.gradle。"
+            exit 1
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
       - name: Install Android SDK
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
-
+      - name: Detector checks
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f tests/DetectorTest.java ]; then
+            javac -d /tmp/carquick-checks app/src/main/java/com/carquick/android/MessageDetector.java tests/DetectorTest.java
+            java -cp /tmp/carquick-checks com.carquick.android.DetectorTest
+          fi
       - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: gradle --no-daemon assembleDebug
-
       - uses: actions/upload-artifact@v4
         with:
           name: car-quick-android-test-apk
-          path: CarQuickAndroid/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
